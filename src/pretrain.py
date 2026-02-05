@@ -339,9 +339,18 @@ def main_worker(gpu, args):
         torch.cuda.set_device(args.gpu)
         dist.init_process_group(backend='nccl')
 
+    from pretrain_data import MOVIELENS_DATASETS
+
     print(f'Building train loader at GPU {gpu}')
     # define the prompts used in training
-    if args.train == 'yelp':
+    if args.train in MOVIELENS_DATASETS:
+        # MovieLens / Netflix / Douban_Monti: rating + sequential + traditional only (no reviews/explanations)
+        train_task_list = {
+            'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9', '1-10'],
+            'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12', '2-13'],
+            'traditional': ['5-1', '5-2', '5-3', '5-4', '5-5', '5-6', '5-7', '5-8']
+        }
+    elif args.train == 'yelp':
         train_task_list = {'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9'],
         'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12'],
         'explanation': ['3-1', '3-2', '3-3', '3-4', '3-5', '3-6', '3-7', '3-8', '3-9'],
@@ -357,7 +366,10 @@ def main_worker(gpu, args):
         }
     # define sampling numbers for each group of personalized prompts (see pretrain_data.py)
     # if greater than 1, a data sample will be used for multiple times with different prompts in certain task family
-    train_sample_numbers = {'rating': 1, 'sequential': (5, 5, 10), 'explanation': 1, 'review': 1, 'traditional': (10, 5)}
+    if args.train in MOVIELENS_DATASETS:
+        train_sample_numbers = {'rating': 1, 'sequential': (5, 5, 10), 'traditional': (10, 5)}
+    else:
+        train_sample_numbers = {'rating': 1, 'sequential': (5, 5, 10), 'explanation': 1, 'review': 1, 'traditional': (10, 5)}
     train_loader = get_loader(
         args,
         train_task_list,
@@ -371,7 +383,13 @@ def main_worker(gpu, args):
 
     print(f'Building val loader at GPU {gpu}')
     # define the prompts used in validation
-    if args.valid == 'yelp':
+    if args.valid in MOVIELENS_DATASETS:
+        val_task_list = {
+            'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9', '1-10'],
+            'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12', '2-13'],
+            'traditional': ['5-1', '5-2', '5-3', '5-4', '5-5', '5-6', '5-7', '5-8']
+        }
+    elif args.valid == 'yelp':
         val_task_list = {'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9'],
         'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12'],
         'explanation': ['3-1', '3-2', '3-3', '3-4', '3-5', '3-6', '3-7', '3-8', '3-9'],
@@ -385,7 +403,10 @@ def main_worker(gpu, args):
         'review': ['4-1', '4-2', '4-3'],
         'traditional': ['5-1', '5-2', '5-3', '5-4', '5-5', '5-6', '5-7']
         }
-    val_sample_numbers = {'rating': 1, 'sequential': (1, 1, 1), 'explanation': 1, 'review': 1, 'traditional': (1, 1)}
+    if args.valid in MOVIELENS_DATASETS:
+        val_sample_numbers = {'rating': 1, 'sequential': (1, 1, 1), 'traditional': (1, 1)}
+    else:
+        val_sample_numbers = {'rating': 1, 'sequential': (1, 1, 1), 'explanation': 1, 'review': 1, 'traditional': (1, 1)}
     val_loader = get_loader(
         args,
         val_task_list,
@@ -427,6 +448,14 @@ if __name__ == "__main__":
         dsets.append('sports')
     if 'yelp' in args.train:
         dsets.append('yelp')
+    if 'ml-1m' in args.train:
+        dsets.append('ml1m')
+    if 'ml-20m' in args.train:
+        dsets.append('ml20m')
+    if 'netflix' in args.train:
+        dsets.append('netflix')
+    if 'douban_monti' in args.train:
+        dsets.append('douban')
     comments.append(''.join(dsets))
     if args.backbone:
         comments.append(args.backbone)

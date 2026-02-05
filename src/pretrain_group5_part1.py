@@ -338,14 +338,14 @@ def main_worker(gpu, args):
         torch.cuda.set_device(args.gpu)
         dist.init_process_group(backend='nccl')
 
+    from pretrain_data import MOVIELENS_DATASETS
+
     print(f'Building train loader at GPU {gpu}')
-    if args.train == 'yelp':
-        train_task_list = {'traditional': ['5-1', '5-2', '5-3', '5-4']
-        }
+    train_task_list = {'traditional': ['5-1', '5-2', '5-3', '5-4']}
+    if args.train in MOVIELENS_DATASETS:
+        train_sample_numbers = {'rating': 1, 'sequential': (5, 5, 10), 'traditional': (100, 5)}
     else:
-        train_task_list = {'traditional': ['5-1', '5-2', '5-3', '5-4']
-        }
-    train_sample_numbers = {'rating': 1, 'sequential': (5, 5, 10), 'explanation': 1, 'review': 1, 'traditional': (100, 5)} # Change sampling number for different datasets and model sizes
+        train_sample_numbers = {'rating': 1, 'sequential': (5, 5, 10), 'explanation': 1, 'review': 1, 'traditional': (100, 5)}
     train_loader = get_loader(
         args,
         train_task_list,
@@ -358,13 +358,11 @@ def main_worker(gpu, args):
     )
 
     print(f'Building val loader at GPU {gpu}')
-    if args.valid == 'yelp':
-        val_task_list = {'traditional': ['5-1', '5-2', '5-3', '5-4']
-        }
+    val_task_list = {'traditional': ['5-1', '5-2', '5-3', '5-4']}
+    if args.valid in MOVIELENS_DATASETS:
+        val_sample_numbers = {'rating': 1, 'sequential': (1, 1, 1), 'traditional': (1, 1)}
     else:
-        val_task_list = {'traditional': ['5-1', '5-2', '5-3', '5-4']
-        }
-    val_sample_numbers = {'rating': 1, 'sequential': (1, 1, 1), 'explanation': 1, 'review': 1, 'traditional': (1, 1)}
+        val_sample_numbers = {'rating': 1, 'sequential': (1, 1, 1), 'explanation': 1, 'review': 1, 'traditional': (1, 1)}
     val_loader = get_loader(
         args,
         val_task_list,
@@ -406,6 +404,14 @@ if __name__ == "__main__":
         dsets.append('sports')
     if 'yelp' in args.train:
         dsets.append('yelp')
+    if 'ml-1m' in args.train:
+        dsets.append('ml1m')
+    if 'ml-20m' in args.train:
+        dsets.append('ml20m')
+    if 'netflix' in args.train:
+        dsets.append('netflix')
+    if 'douban_monti' in args.train:
+        dsets.append('douban')
     comments.append(''.join(dsets))
     if args.backbone:
         comments.append(args.backbone)

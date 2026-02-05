@@ -1742,19 +1742,690 @@ class P5_Yelp_Dataset(Dataset):
         return batch_entry
     
 
-def get_loader(args, task_list, sample_numbers, split='toys', mode='train', 
+MOVIELENS_DATASETS = {'ml-1m', 'ml-20m', 'netflix', 'douban_monti'}
+
+
+class P5_MovieLens_Dataset(Dataset):
+    """
+    Dataset class for MovieLens, Netflix, and Douban_Monti datasets.
+    These are interaction-heavy, text-light datasets that support:
+    - Task Family 1: Rating prediction
+    - Task Family 2: Sequential recommendation
+    - Task Family 5: Direct (traditional) recommendation
+
+    Unlike Amazon/Yelp datasets, these do NOT have review text or explanations.
+    Movie titles are used as item descriptions where available.
+    """
+    def __init__(self, all_tasks, task_list, tokenizer, args, sample_numbers,
+                 mode='train', split='ml-1m', rating_augment=False, sample_type='random'):
+        self.all_tasks = all_tasks
+        self.task_list = task_list
+        self.tokenizer = tokenizer
+        self.args = args
+        self.sample_numbers = sample_numbers
+        self.split = split
+        self.rating_augment = rating_augment
+        self.sample_type = sample_type
+
+        print('Data sources: ', split.split(','))
+        self.mode = mode
+        if self.mode == 'train':
+            self.review_data = load_pickle(os.path.join('data', split, 'review_splits.pkl'))['train']
+            if self.rating_augment:
+                self.rating_data = load_pickle(os.path.join('data', split, 'rating_splits_augmented.pkl'))['train']
+            else:
+                self.rating_data = self.review_data
+        elif self.mode == 'val':
+            self.review_data = load_pickle(os.path.join('data', split, 'review_splits.pkl'))['val']
+            if self.rating_augment:
+                self.rating_data = load_pickle(os.path.join('data', split, 'rating_splits_augmented.pkl'))['val']
+            else:
+                self.rating_data = self.review_data
+        elif self.mode == 'test':
+            self.review_data = load_pickle(os.path.join('data', split, 'review_splits.pkl'))['test']
+            if self.rating_augment:
+                self.rating_data = load_pickle(os.path.join('data', split, 'rating_splits_augmented.pkl'))['test']
+            else:
+                self.rating_data = self.review_data
+        else:
+            raise NotImplementedError
+
+        self.sequential_data = ReadLineFromFile(os.path.join('data', split, 'sequential_data.txt'))
+        item_count = defaultdict(int)
+        user_items = defaultdict()
+
+        for line in self.sequential_data:
+            user, items = line.strip().split(' ', 1)
+            items = items.split(' ')
+            items = [int(item) for item in items]
+            user_items[user] = items
+            for item in items:
+                item_count[item] += 1
+
+        self.all_item = list(item_count.keys())
+        count = list(item_count.values())
+        sum_value = np.sum([x for x in count])
+        self.probability = [value / sum_value for value in count]
+        self.user_items = user_items
+
+        if self.mode == 'test':
+            self.negative_samples = ReadLineFromFile(os.path.join('data', split, 'negative_samples.txt'))
+
+        datamaps = load_json(os.path.join('data', split, 'datamaps.json'))
+        self.user2id = datamaps['user2id']
+        self.item2id = datamaps['item2id']
+        self.user_list = list(datamaps['user2id'].keys())
+        self.item_list = list(datamaps['item2id'].keys())
+        self.id2item = datamaps['id2item']
+
+        self.user_id2name = load_pickle(os.path.join('data', split, 'user_id2name.pkl'))
+
+        # Load movie title metadata (instead of Amazon's meta.json.gz)
+        title_path = os.path.join('data', split, 'item_id2title.pkl')
+        if os.path.exists(title_path):
+            self.item_id2title = load_pickle(title_path)
+        else:
+            self.item_id2title = {}
+
+        print('compute_datum_info')
+        self.total_length = 0
+        self.datum_info = []
+        self.compute_datum_info()
+
+    def compute_datum_info(self):
+        curr = 0
+        for key in list(self.task_list.keys()):
+            if key == 'rating':
+                self.total_length += len(self.rating_data) * self.sample_numbers[key]
+                for i in range(self.total_length - curr):
+                    self.datum_info.append((i + curr, key, i // self.sample_numbers[key]))
+                curr = self.total_length
+            elif key == 'sequential':
+                if sum([0 < int(ind.split('-')[1]) <= 6 or int(ind.split('-')[1]) == 13 for ind in self.task_list[key]]):
+                    self.total_length += len(self.sequential_data) * self.sample_numbers[key][0]
+                    for i in range(self.total_length - curr):
+                        self.datum_info.append((i + curr, key, i // self.sample_numbers[key][0]))
+                    curr = self.total_length
+                if sum([6 < int(ind.split('-')[1]) <= 10 for ind in self.task_list[key]]):
+                    self.total_length += len(self.sequential_data) * self.sample_numbers[key][1]
+                    for i in range(self.total_length - curr):
+                        self.datum_info.append((i + curr, key, i // self.sample_numbers[key][1]))
+                    curr = self.total_length
+                if sum([10 < int(ind.split('-')[1]) <= 12 for ind in self.task_list[key]]):
+                    self.total_length += len(self.sequential_data) * self.sample_numbers[key][2]
+                    for i in range(self.total_length - curr):
+                        self.datum_info.append((i + curr, key, i // self.sample_numbers[key][2]))
+                    curr = self.total_length
+            elif key == 'traditional':
+                if sum([0 < int(ind.split('-')[1]) <= 4 for ind in self.task_list[key]]):
+                    self.total_length += len(self.user2id) * self.sample_numbers[key][0]
+                    for i in range(self.total_length - curr):
+                        self.datum_info.append((i + curr, key, i // self.sample_numbers[key][0]))
+                    curr = self.total_length
+                if sum([4 < int(ind.split('-')[1]) <= 8 for ind in self.task_list[key]]):
+                    self.total_length += len(self.user2id) * self.sample_numbers[key][1]
+                    for i in range(self.total_length - curr):
+                        self.datum_info.append((i + curr, key, i // self.sample_numbers[key][1]))
+                    curr = self.total_length
+            else:
+                raise NotImplementedError
+
+    def gaussian_sampling(self, datum):
+        if self.mode == 'train':
+            if int(datum['overall']) == 1:
+                sampled_rating = round(torch.normal(mean=torch.tensor((1.0+1.4)/2), std=torch.tensor((1.4-1.0)/4)).item(), 1)
+            elif int(datum['overall']) == 2:
+                sampled_rating = round(torch.normal(mean=torch.tensor((1.5+2.4)/2), std=torch.tensor((2.4-1.5)/4)).item(), 1)
+            elif int(datum['overall']) == 3:
+                sampled_rating = round(torch.normal(mean=torch.tensor((2.5+3.4)/2), std=torch.tensor((3.4-2.5)/4)).item(), 1)
+            elif int(datum['overall']) == 4:
+                sampled_rating = round(torch.normal(mean=torch.tensor((3.5+4.4)/2), std=torch.tensor((4.4-3.5)/4)).item(), 1)
+            else:
+                sampled_rating = round(torch.normal(mean=torch.tensor((4.5+5.0)/2), std=torch.tensor((5.0-4.5)/4)).item(), 1)
+            if sampled_rating > 5.0:
+                sampled_rating = 5.0
+            if sampled_rating < 1.0:
+                sampled_rating = 1.0
+            return str(sampled_rating)
+        else:
+            return int(datum['overall'])
+
+    def _get_title(self, item_id):
+        """Get movie title for an item_id (mapped ID as string)."""
+        if item_id in self.item_id2title:
+            return self.item_id2title[item_id]
+        return f'item_{item_id}'
+
+    def __len__(self):
+        return self.total_length
+
+    def __getitem__(self, idx):
+
+        out_dict = {}
+        out_dict['args'] = self.args
+
+        loss_weight = 1.0
+
+        datum_info_idx = self.datum_info[idx]
+        assert datum_info_idx[0] == idx
+        if len(datum_info_idx) == 3:
+            task_name = datum_info_idx[1]
+            datum_idx = datum_info_idx[2]
+        elif len(datum_info_idx) == 4:
+            task_name = datum_info_idx[1]
+            datum_idx = datum_info_idx[2]
+            task_idx = datum_info_idx[3]
+        else:
+            raise NotImplementedError
+
+        if task_name == 'rating':
+            rating_datum = self.rating_data[datum_idx]
+            task_candidates = self.task_list[task_name]
+            task_idx = random.randint(0, len(task_candidates)-1)
+            task_template = self.all_tasks['rating'][task_candidates[task_idx]]
+            assert task_template['task'] == 'rating'
+
+            user_id = self.user2id[rating_datum['reviewerID']]
+            item_id = self.item2id[rating_datum['asin']]
+            title = self._get_title(item_id)
+            user_desc = self.user_id2name.get(user_id, f'user_{user_id}')
+
+            if task_template['id'] == '1-1':
+                source_text = task_template['source'].format(user_id, item_id)
+                target_text = task_template['target'].format(self.gaussian_sampling(rating_datum))
+            elif task_template['id'] == '1-2':
+                source_text = task_template['source'].format(user_id, title)
+                target_text = task_template['target'].format(self.gaussian_sampling(rating_datum))
+            elif task_template['id'] == '1-3':
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_id, item_id, int(rating_datum['overall']))
+                    target_text = task_template['target'].format('yes')
+                else:
+                    overall_candidates = [_ for _ in range(1, 6) if _ != int(rating_datum['overall'])]
+                    overall_idx = random.randint(0, len(overall_candidates)-1)
+                    source_text = task_template['source'].format(user_id, item_id, overall_candidates[overall_idx])
+                    target_text = task_template['target'].format('no')
+            elif task_template['id'] == '1-4':
+                source_text = task_template['source'].format(user_id, item_id)
+                if int(rating_datum['overall']) >= 4:
+                    target_text = task_template['target'].format('like')
+                else:
+                    target_text = task_template['target'].format('dislike')
+            elif task_template['id'] == '1-5':
+                source_text = task_template['source'].format(user_id, item_id, title)
+                target_text = task_template['target'].format(self.gaussian_sampling(rating_datum))
+            elif task_template['id'] == '1-6':
+                source_text = task_template['source'].format(user_desc, item_id)
+                target_text = task_template['target'].format(self.gaussian_sampling(rating_datum))
+            elif task_template['id'] == '1-7':
+                source_text = task_template['source'].format(user_desc, title)
+                target_text = task_template['target'].format(self.gaussian_sampling(rating_datum))
+            elif task_template['id'] == '1-8':
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_desc, int(rating_datum['overall']), title)
+                    target_text = task_template['target'].format('yes')
+                else:
+                    overall_candidates = [_ for _ in range(1, 6) if _ != int(rating_datum['overall'])]
+                    overall_idx = random.randint(0, len(overall_candidates)-1)
+                    source_text = task_template['source'].format(user_desc, overall_candidates[overall_idx], title)
+                    target_text = task_template['target'].format('no')
+            elif task_template['id'] == '1-9':
+                source_text = task_template['source'].format(user_desc, title)
+                if int(rating_datum['overall']) >= 4:
+                    target_text = task_template['target'].format('like')
+                else:
+                    target_text = task_template['target'].format('dislike')
+            elif task_template['id'] == '1-10':
+                source_text = task_template['source'].format(user_desc, title)
+                target_text = task_template['target'].format(self.gaussian_sampling(rating_datum))
+            else:
+                raise NotImplementedError
+
+        elif task_name == 'sequential':
+            sequential_datum = self.sequential_data[datum_idx]
+            sequence = sequential_datum.split()
+            user_id = sequence[0]
+            user_desc = self.user_id2name.get(user_id, f'user_{user_id}')
+            history_limit = 20  # Limit history length for large datasets
+            if self.mode == 'train':
+                end_candidates = [_ for _ in range(max(2, len(sequence) - 6), len(sequence) - 3)]
+                end_index = random.randint(0, len(end_candidates)-1)
+                end_pos = end_candidates[end_index]
+                start_candidates = [_ for _ in range(1, min(4, end_pos))]
+                start_index = random.randint(0, len(start_candidates)-1)
+                start_pos = start_candidates[start_index]
+                purchase_history = sequence[start_pos:end_pos+1]
+                target_item = sequence[end_pos+1]
+            elif self.mode == 'val':
+                purchase_history = sequence[1:-2]
+                target_item = sequence[-2]
+            elif self.mode == 'test':
+                purchase_history = sequence[1:-1]
+                target_item = sequence[-1]
+            else:
+                raise NotImplementedError
+            if len(purchase_history) > history_limit:
+                purchase_history = purchase_history[-history_limit:]
+
+            task_candidates = self.task_list[task_name]
+            task_idx = random.randint(0, len(task_candidates)-1)
+            task_template = self.all_tasks['sequential'][task_candidates[task_idx]]
+            assert task_template['task'] == 'sequential'
+
+            if task_template['id'] == '2-1':
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_id, ' , '.join(purchase_history))
+                else:
+                    source_text = task_template['source'].format(user_id, ' -> '.join(purchase_history))
+                target_text = task_template['target'].format(target_item)
+            elif task_template['id'] == '2-2':
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_id, ' , '.join(purchase_history))
+                else:
+                    source_text = task_template['source'].format(user_id, ' -> '.join(purchase_history))
+                target_text = task_template['target'].format(target_item)
+            elif task_template['id'] == '2-3':
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_id, ' , '.join(purchase_history))
+                else:
+                    source_text = task_template['source'].format(user_id, ' -> '.join(purchase_history))
+                target_text = task_template['target'].format(target_item)
+            elif task_template['id'] == '2-4':
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_desc, ' , '.join(purchase_history))
+                else:
+                    source_text = task_template['source'].format(user_desc, ' -> '.join(purchase_history))
+                target_text = task_template['target'].format(target_item)
+            elif task_template['id'] == '2-5':
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_desc, ' , '.join(purchase_history))
+                else:
+                    source_text = task_template['source'].format(user_desc, ' -> '.join(purchase_history))
+                target_text = task_template['target'].format(target_item)
+            elif task_template['id'] == '2-6':
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_desc, ' , '.join(purchase_history))
+                else:
+                    source_text = task_template['source'].format(user_desc, ' -> '.join(purchase_history))
+                target_text = task_template['target'].format(target_item)
+            elif task_template['id'] == '2-7' or task_template['id'] == '2-9':
+                if self.mode in ['train', 'val']:
+                    user_seq = self.user_items[user_id]
+                    candidate_samples = []
+                    candidate_num = random.randint(79, 99)
+                    while len(candidate_samples) < candidate_num:
+                        if self.sample_type == 'random':
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False)
+                        else:
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False, p=self.probability)
+                        sample_ids = [str(item) for item in sample_ids if item not in user_seq and item not in candidate_samples]
+                        candidate_samples.extend(sample_ids)
+                    candidate_samples = candidate_samples[:candidate_num]
+                elif self.mode == 'test':
+                    assert user_id == self.negative_samples[int(user_id)-1].split(' ', 1)[0]
+                    candidate_samples = self.negative_samples[int(user_id)-1].split(' ', 1)[1].split(' ')
+                else:
+                    raise NotImplementedError
+                candidate_samples.extend([target_item])
+                random.shuffle(candidate_samples)
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_id, ' , '.join(purchase_history), ' , '.join(candidate_samples))
+                else:
+                    source_text = task_template['source'].format(user_id, ' -> '.join(purchase_history), ' , '.join(candidate_samples))
+                target_text = task_template['target'].format(target_item)
+            elif task_template['id'] == '2-8' or task_template['id'] == '2-10':
+                if self.mode in ['train', 'val']:
+                    user_seq = self.user_items[user_id]
+                    candidate_samples = []
+                    candidate_num = random.randint(79, 99)
+                    while len(candidate_samples) < candidate_num:
+                        if self.sample_type == 'random':
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False)
+                        else:
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False, p=self.probability)
+                        sample_ids = [str(item) for item in sample_ids if item not in user_seq and item not in candidate_samples]
+                        candidate_samples.extend(sample_ids)
+                    candidate_samples = candidate_samples[:candidate_num]
+                elif self.mode == 'test':
+                    assert user_id == self.negative_samples[int(user_id)-1].split(' ', 1)[0]
+                    candidate_samples = self.negative_samples[int(user_id)-1].split(' ', 1)[1].split(' ')
+                else:
+                    raise NotImplementedError
+                candidate_samples.extend([target_item])
+                random.shuffle(candidate_samples)
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_desc, ' , '.join(purchase_history), ' , '.join(candidate_samples))
+                else:
+                    source_text = task_template['source'].format(user_desc, ' -> '.join(purchase_history), ' , '.join(candidate_samples))
+                target_text = task_template['target'].format(target_item)
+            elif task_template['id'] == '2-11':
+                symbol_prob = random.random()
+                if symbol_prob > 0.5:
+                    symbol = ' , '
+                else:
+                    symbol = ' -> '
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_id, symbol.join(purchase_history), target_item)
+                    target_text = task_template['target'].format('yes')
+                else:
+                    user_seq = self.user_items[user_id]
+                    candidate_samples = []
+                    candidate_num = 1
+                    while len(candidate_samples) < candidate_num:
+                        if self.sample_type == 'random':
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False)
+                        else:
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False, p=self.probability)
+                        sample_ids = [str(item) for item in sample_ids if item not in user_seq and item not in candidate_samples]
+                        candidate_samples.extend(sample_ids)
+                    candidate_samples = candidate_samples[:candidate_num]
+                    source_text = task_template['source'].format(user_id, symbol.join(purchase_history), candidate_samples[0])
+                    target_text = task_template['target'].format('no')
+            elif task_template['id'] == '2-12':
+                symbol_prob = random.random()
+                if symbol_prob > 0.5:
+                    symbol = ' , '
+                else:
+                    symbol = ' -> '
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_desc, symbol.join(purchase_history), target_item)
+                    target_text = task_template['target'].format('yes')
+                else:
+                    user_seq = self.user_items[user_id]
+                    candidate_samples = []
+                    candidate_num = 1
+                    while len(candidate_samples) < candidate_num:
+                        if self.sample_type == 'random':
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False)
+                        else:
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False, p=self.probability)
+                        sample_ids = [str(item) for item in sample_ids if item not in user_seq and item not in candidate_samples]
+                        candidate_samples.extend(sample_ids)
+                    candidate_samples = candidate_samples[:candidate_num]
+                    source_text = task_template['source'].format(user_desc, symbol.join(purchase_history), candidate_samples[0])
+                    target_text = task_template['target'].format('no')
+            elif task_template['id'] == '2-13':
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_desc, ' , '.join(purchase_history))
+                else:
+                    source_text = task_template['source'].format(user_desc, ' -> '.join(purchase_history))
+                target_text = task_template['target'].format(target_item)
+            else:
+                raise NotImplementedError
+
+        elif task_name == 'traditional':
+            sequential_datum = self.sequential_data[datum_idx]
+            sequence = sequential_datum.split()
+            user_id = sequence[0]
+            user_desc = self.user_id2name.get(user_id, f'user_{user_id}')
+            if self.mode == 'train':
+                target_candidates = sequence[1:-2]
+                target_idx = random.randint(0, len(target_candidates)-1)
+                target_item = target_candidates[target_idx]
+            elif self.mode == 'val':
+                target_item = sequence[-2]
+            elif self.mode == 'test':
+                target_item = sequence[-1]
+            else:
+                raise NotImplementedError
+
+            task_candidates = self.task_list[task_name]
+            task_idx = random.randint(0, len(task_candidates)-1)
+            task_template = self.all_tasks['traditional'][task_candidates[task_idx]]
+            assert task_template['task'] == 'traditional'
+
+            if task_template['id'] == '5-1':
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(user_id, target_item)
+                    target_text = task_template['target'].format('yes')
+                else:
+                    user_seq = self.user_items[user_id]
+                    candidate_samples = []
+                    candidate_num = 1
+                    while len(candidate_samples) < candidate_num:
+                        if self.sample_type == 'random':
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False)
+                        else:
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False, p=self.probability)
+                        sample_ids = [str(item) for item in sample_ids if item not in user_seq and item not in candidate_samples]
+                        candidate_samples.extend(sample_ids)
+                    candidate_samples = candidate_samples[:candidate_num]
+                    source_text = task_template['source'].format(user_id, candidate_samples[0])
+                    target_text = task_template['target'].format('no')
+            elif task_template['id'] == '5-2':
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    source_text = task_template['source'].format(target_item, user_desc)
+                    target_text = task_template['target'].format('yes')
+                else:
+                    user_seq = self.user_items[user_id]
+                    candidate_samples = []
+                    candidate_num = 1
+                    while len(candidate_samples) < candidate_num:
+                        if self.sample_type == 'random':
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False)
+                        else:
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False, p=self.probability)
+                        sample_ids = [str(item) for item in sample_ids if item not in user_seq and item not in candidate_samples]
+                        candidate_samples.extend(sample_ids)
+                    candidate_samples = candidate_samples[:candidate_num]
+                    source_text = task_template['source'].format(candidate_samples[0], user_desc)
+                    target_text = task_template['target'].format('no')
+            elif task_template['id'] == '5-3':
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    title = self._get_title(target_item)
+                    source_text = task_template['source'].format(user_desc, title)
+                    target_text = task_template['target'].format('yes')
+                else:
+                    user_seq = self.user_items[user_id]
+                    candidate_samples = []
+                    candidate_num = 1
+                    while len(candidate_samples) < candidate_num:
+                        if self.sample_type == 'random':
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False)
+                        else:
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False, p=self.probability)
+                        sample_ids = [str(item) for item in sample_ids if item not in user_seq and item not in candidate_samples]
+                        candidate_samples.extend(sample_ids)
+                    candidate_samples = candidate_samples[:candidate_num]
+                    title = self._get_title(candidate_samples[0])
+                    source_text = task_template['source'].format(user_desc, title)
+                    target_text = task_template['target'].format('no')
+            elif task_template['id'] == '5-4':
+                rand_prob = random.random()
+                if rand_prob > 0.5:
+                    title = self._get_title(target_item)
+                    source_text = task_template['source'].format(user_id, title)
+                    target_text = task_template['target'].format('yes')
+                else:
+                    user_seq = self.user_items[user_id]
+                    candidate_samples = []
+                    candidate_num = 1
+                    while len(candidate_samples) < candidate_num:
+                        if self.sample_type == 'random':
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False)
+                        else:
+                            sample_ids = np.random.choice(self.all_item, candidate_num, replace=False, p=self.probability)
+                        sample_ids = [str(item) for item in sample_ids if item not in user_seq and item not in candidate_samples]
+                        candidate_samples.extend(sample_ids)
+                    candidate_samples = candidate_samples[:candidate_num]
+                    title = self._get_title(candidate_samples[0])
+                    source_text = task_template['source'].format(user_id, title)
+                    target_text = task_template['target'].format('no')
+            elif task_template['id'] == '5-5' or task_template['id'] == '5-6':
+                user_seq = self.user_items[user_id]
+                candidate_samples = []
+                candidate_num = 99
+                while len(candidate_samples) < candidate_num:
+                    if self.sample_type == 'random':
+                        sample_ids = np.random.choice(self.all_item, candidate_num, replace=False)
+                    else:
+                        sample_ids = np.random.choice(self.all_item, candidate_num, replace=False, p=self.probability)
+                    sample_ids = [str(item) for item in sample_ids if item not in user_seq and item not in candidate_samples]
+                    candidate_samples.extend(sample_ids)
+                candidate_samples = candidate_samples[:candidate_num]
+                candidate_samples.extend([target_item])
+                random.shuffle(candidate_samples)
+                source_text = task_template['source'].format(user_desc, ' , '.join(candidate_samples))
+                target_text = task_template['target'].format(target_item)
+            elif task_template['id'] == '5-7' or task_template['id'] == '5-8':
+                user_seq = self.user_items[user_id]
+                candidate_samples = []
+                candidate_num = 99
+                while len(candidate_samples) < candidate_num:
+                    if self.sample_type == 'random':
+                        sample_ids = np.random.choice(self.all_item, candidate_num, replace=False)
+                    else:
+                        sample_ids = np.random.choice(self.all_item, candidate_num, replace=False, p=self.probability)
+                    sample_ids = [str(item) for item in sample_ids if item not in user_seq and item not in candidate_samples]
+                    candidate_samples.extend(sample_ids)
+                candidate_samples = candidate_samples[:candidate_num]
+                candidate_samples.extend([target_item])
+                random.shuffle(candidate_samples)
+                source_text = task_template['source'].format(user_id, ' , '.join(candidate_samples))
+                target_text = task_template['target'].format(target_item)
+            else:
+                raise NotImplementedError
+
+        else:
+            raise NotImplementedError
+
+        input_ids = self.tokenizer.encode(
+                source_text, padding=True, truncation=True, max_length=self.args.max_text_length)
+        tokenized_text = self.tokenizer.tokenize(source_text)
+        whole_word_ids = self.calculate_whole_word_ids(tokenized_text, input_ids)
+        assert len(whole_word_ids) == len(input_ids)
+
+        target_ids = self.tokenizer.encode(
+                target_text, padding=True, truncation=True, max_length=self.args.gen_max_length)
+
+        out_dict['input_ids'] = torch.LongTensor(input_ids)
+        out_dict['input_length'] = len(input_ids)
+        out_dict['whole_word_ids'] = torch.LongTensor(whole_word_ids)
+        out_dict['target_ids'] = torch.LongTensor(target_ids)
+        out_dict['target_length'] = len(target_ids)
+
+        out_dict['source_text'] = source_text
+        out_dict['tokenized_text'] = tokenized_text
+        out_dict['target_text'] = target_text
+
+        out_dict['task'] = task_template['task']
+
+        out_dict['loss_weight'] = loss_weight
+
+        return out_dict
+
+    def calculate_whole_word_ids(self, tokenized_text, input_ids):
+        whole_word_ids = []
+        curr = 0
+        for i in range(len(tokenized_text)):
+            if tokenized_text[i].startswith('▁'):
+                curr += 1
+                whole_word_ids.append(curr)
+            else:
+                whole_word_ids.append(curr)
+        last_item = whole_word_ids[len(input_ids) - 2]
+        return whole_word_ids[:len(input_ids) - 1] + [0]  # [0] for </s>
+
+    def collate_fn(self, batch):
+        batch_entry = {}
+
+        B = len(batch)
+
+        args = self.args
+
+        S_W_L = max(entry['input_length'] for entry in batch)
+        T_W_L = max(entry['target_length'] for entry in batch)
+
+        input_ids = torch.ones(B, S_W_L, dtype=torch.long) * self.tokenizer.pad_token_id
+        whole_word_ids = torch.ones(B, S_W_L, dtype=torch.long) * self.tokenizer.pad_token_id
+        target_ids = torch.ones(B, T_W_L, dtype=torch.long) * self.tokenizer.pad_token_id
+
+        loss_weights = torch.ones(B, dtype=torch.float)
+
+        tasks = []
+        source_text = []
+        tokenized_text = []
+        target_text = []
+
+        for i, entry in enumerate(batch):
+            input_ids[i, :entry['input_length']] = entry['input_ids']
+            whole_word_ids[i, :entry['input_length']] = entry['whole_word_ids']
+            target_ids[i, :entry['target_length']] = entry['target_ids']
+
+            if 'task' in entry:
+                tasks.append(entry['task'])
+
+            if 'source_text' in entry:
+                source_text.append(entry['source_text'])
+
+            if 'tokenized_text' in entry:
+                tokenized_text.append(entry['tokenized_text'])
+
+            if 'target_text' in entry:
+                target_text.append(entry['target_text'])
+
+            if 'loss_weight' in entry:
+                loss_weights[i] = entry['loss_weight']
+
+        assert 't5' in args.backbone
+        word_mask = target_ids != self.tokenizer.pad_token_id
+        target_ids[~word_mask] = -100
+        batch_entry['task'] = tasks
+
+        batch_entry['source_text'] = source_text
+        batch_entry['target_text'] = target_text
+
+        batch_entry['input_ids'] = input_ids
+        batch_entry['whole_word_ids'] = whole_word_ids
+        batch_entry['target_ids'] = target_ids
+
+        batch_entry['loss_weights'] = loss_weights
+
+        return batch_entry
+
+
+def get_loader(args, task_list, sample_numbers, split='toys', mode='train',
                batch_size=16, workers=4, distributed=False):
 
     if 't5' in args.backbone:
         tokenizer = P5Tokenizer.from_pretrained(
-            args.backbone, 
-            max_length=args.max_text_length, 
+            args.backbone,
+            max_length=args.max_text_length,
             do_lower_case=args.do_lower_case)
 
     if split == 'yelp':
         from all_yelp_templates import all_tasks as task_templates
-        
+
         dataset = P5_Yelp_Dataset(
+            task_templates,
+            task_list,
+            tokenizer,
+            args,
+            sample_numbers,
+            mode=mode,
+            split=split,
+            rating_augment=False
+        )
+    elif split in MOVIELENS_DATASETS:
+        from all_movielens_templates import all_tasks as task_templates
+
+        dataset = P5_MovieLens_Dataset(
             task_templates,
             task_list,
             tokenizer,
@@ -1797,5 +2468,5 @@ def get_loader(args, task_list, sample_numbers, split='toys', mode='train',
             shuffle=None if (sampler is not None) else False,
             collate_fn=dataset.collate_fn,
             drop_last=False)
-        
+
     return loader
