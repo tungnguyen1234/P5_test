@@ -218,9 +218,10 @@ class Trainer(TrainerBase):
             if self.verbose:
                 pbar.close()
 
-            dist.barrier()
+            if self.args.distributed:
+                dist.barrier()
 
-            results = reduce_dict(epoch_results, average=False)
+            results = reduce_dict(epoch_results, average=False) if self.args.distributed else epoch_results
             if self.verbose:
                 train_loss = results['total_loss']
                 train_loss_count = results['total_loss_count']
@@ -238,13 +239,14 @@ class Trainer(TrainerBase):
                 losses_str += '\n'
                 print(losses_str)
 
-            dist.barrier()
+            if self.args.distributed:
+                dist.barrier()
 
             if epoch > 10:
                 # Validation
                 valid_results = self.evaluate_epoch(epoch=epoch)
 
-                valid_results = reduce_dict(valid_results, average=False)
+                valid_results = reduce_dict(valid_results, average=False) if self.args.distributed else valid_results
                 if self.verbose and step_i % 200:
                     valid_loss = valid_results['total_loss']
                     valid_loss_count = valid_results['total_loss_count']
@@ -262,7 +264,8 @@ class Trainer(TrainerBase):
                     losses_str += '\n'
                     print(losses_str)
 
-                dist.barrier()
+                if self.args.distributed:
+                    dist.barrier()
 
                 if self.verbose:
                     # Save
@@ -271,13 +274,15 @@ class Trainer(TrainerBase):
                         self.save("BEST_EVAL_LOSS")
                     self.save("Epoch%02d" % (epoch + 1))
 
-                dist.barrier()
+                if self.args.distributed:
+                    dist.barrier()
             else:
                 # Skip validation
                 print("Skip validation for Epoch%02d" % (epoch + 1))
                 self.save("Epoch%02d" % (epoch + 1))
-                
-                dist.barrier()
+
+                if self.args.distributed:
+                    dist.barrier()
 
     def evaluate_epoch(self, epoch):
         LOSSES_NAME = self.args.LOSSES_NAME
@@ -321,11 +326,13 @@ class Trainer(TrainerBase):
 
                     pbar.set_description(desc_str)
                     pbar.update(1)
-                dist.barrier()
+                if self.args.distributed:
+                    dist.barrier()
 
             if self.verbose:
                 pbar.close()
-            dist.barrier()
+            if self.args.distributed:
+                dist.barrier()
 
             return epoch_results
 
@@ -496,3 +503,8 @@ if __name__ == "__main__":
 
     if args.distributed:
         main_worker(args.local_rank, args)
+    else:
+        # Single GPU mode
+        args.gpu = 0
+        args.rank = 0
+        main_worker(0, args)
