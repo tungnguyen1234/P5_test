@@ -341,29 +341,41 @@ def main_worker(gpu, args):
 
     from pretrain_data import MOVIELENS_DATASETS
 
+    # Parse which losses/tasks to use
+    losses_to_use = set(args.losses.split(','))
+
     print(f'Building train loader at GPU {gpu}')
-    # define the prompts used in training
+    print(f'Using losses: {losses_to_use}')
+
+    # Define all available prompts per task type based on dataset
     if args.train in MOVIELENS_DATASETS:
         # MovieLens / Netflix / Douban_Monti: rating + sequential + traditional only (no reviews/explanations)
-        train_task_list = {
+        all_train_tasks = {
             'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9', '1-10'],
             'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12', '2-13'],
             'traditional': ['5-1', '5-2', '5-3', '5-4', '5-5', '5-6', '5-7', '5-8']
         }
     elif args.train == 'yelp':
-        train_task_list = {'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9'],
-        'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12'],
-        'explanation': ['3-1', '3-2', '3-3', '3-4', '3-5', '3-6', '3-7', '3-8', '3-9'],
-        'review': ['4-1', '4-2'],
-        'traditional': ['5-1', '5-2', '5-3', '5-4', '5-5', '5-6', '5-7']
+        all_train_tasks = {
+            'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9'],
+            'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12'],
+            'explanation': ['3-1', '3-2', '3-3', '3-4', '3-5', '3-6', '3-7', '3-8', '3-9'],
+            'review': ['4-1', '4-2'],
+            'traditional': ['5-1', '5-2', '5-3', '5-4', '5-5', '5-6', '5-7']
         }
     else:
-        train_task_list = {'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9'],
-        'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12'],
-        'explanation': ['3-1', '3-2', '3-3', '3-4', '3-5', '3-6', '3-7', '3-8', '3-9', '3-10', '3-11'],
-        'review': ['4-1', '4-2', '4-3'],
-        'traditional': ['5-1', '5-2', '5-3', '5-4', '5-5', '5-6', '5-7']
+        all_train_tasks = {
+            'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9'],
+            'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12'],
+            'explanation': ['3-1', '3-2', '3-3', '3-4', '3-5', '3-6', '3-7', '3-8', '3-9', '3-10', '3-11'],
+            'review': ['4-1', '4-2', '4-3'],
+            'traditional': ['5-1', '5-2', '5-3', '5-4', '5-5', '5-6', '5-7']
         }
+
+    # Filter task_list to only include tasks matching the specified losses
+    train_task_list = {k: v for k, v in all_train_tasks.items() if k in losses_to_use}
+    print(f'Train task list: {list(train_task_list.keys())}')
+
     # define sampling numbers for each group of personalized prompts (see pretrain_data.py)
     # if greater than 1, a data sample will be used for multiple times with different prompts in certain task family
     if args.train in MOVIELENS_DATASETS:
@@ -384,25 +396,32 @@ def main_worker(gpu, args):
     print(f'Building val loader at GPU {gpu}')
     # define the prompts used in validation
     if args.valid in MOVIELENS_DATASETS:
-        val_task_list = {
+        all_val_tasks = {
             'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9', '1-10'],
             'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12', '2-13'],
             'traditional': ['5-1', '5-2', '5-3', '5-4', '5-5', '5-6', '5-7', '5-8']
         }
     elif args.valid == 'yelp':
-        val_task_list = {'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9'],
-        'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12'],
-        'explanation': ['3-1', '3-2', '3-3', '3-4', '3-5', '3-6', '3-7', '3-8', '3-9'],
-        'review': ['4-1', '4-2'],
-        'traditional': ['5-1', '5-2', '5-3', '5-4', '5-5', '5-6', '5-7']
+        all_val_tasks = {
+            'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9'],
+            'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12'],
+            'explanation': ['3-1', '3-2', '3-3', '3-4', '3-5', '3-6', '3-7', '3-8', '3-9'],
+            'review': ['4-1', '4-2'],
+            'traditional': ['5-1', '5-2', '5-3', '5-4', '5-5', '5-6', '5-7']
         }
     else:
-        val_task_list = {'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9'],
-        'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12'],
-        'explanation': ['3-1', '3-2', '3-3', '3-4', '3-5', '3-6', '3-7', '3-8', '3-9', '3-10', '3-11'],
-        'review': ['4-1', '4-2', '4-3'],
-        'traditional': ['5-1', '5-2', '5-3', '5-4', '5-5', '5-6', '5-7']
+        all_val_tasks = {
+            'rating': ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7', '1-8', '1-9'],
+            'sequential': ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8', '2-9', '2-10', '2-11', '2-12'],
+            'explanation': ['3-1', '3-2', '3-3', '3-4', '3-5', '3-6', '3-7', '3-8', '3-9', '3-10', '3-11'],
+            'review': ['4-1', '4-2', '4-3'],
+            'traditional': ['5-1', '5-2', '5-3', '5-4', '5-5', '5-6', '5-7']
         }
+
+    # Filter val_task_list to only include tasks matching the specified losses
+    val_task_list = {k: v for k, v in all_val_tasks.items() if k in losses_to_use}
+    print(f'Val task list: {list(val_task_list.keys())}')
+
     if args.valid in MOVIELENS_DATASETS:
         val_sample_numbers = {'rating': 1, 'sequential': (1, 1, 1), 'traditional': (1, 1)}
     else:
