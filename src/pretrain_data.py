@@ -1755,9 +1755,13 @@ class P5_MovieLens_Dataset(Dataset):
 
     Unlike Amazon/Yelp datasets, these do NOT have review text or explanations.
     Movie titles are used as item descriptions where available.
+
+    Note: Data should be preprocessed with MIN_RATING=4.0 to only include
+    ratings >= 4 (positive interactions only).
     """
     def __init__(self, all_tasks, task_list, tokenizer, args, sample_numbers,
-                 mode='train', split='ml-1m', rating_augment=False, sample_type='random'):
+                 mode='train', split='ml-1m', rating_augment=False, sample_type='random',
+                 min_rating=4.0):
         self.all_tasks = all_tasks
         self.task_list = task_list
         self.tokenizer = tokenizer
@@ -1766,8 +1770,10 @@ class P5_MovieLens_Dataset(Dataset):
         self.split = split
         self.rating_augment = rating_augment
         self.sample_type = sample_type
+        self.min_rating = min_rating
 
         print('Data sources: ', split.split(','))
+        print(f'Filtering ratings >= {min_rating}')
         self.mode = mode
         if self.mode == 'train':
             self.review_data = load_pickle(os.path.join('data', split, 'review_splits.pkl'))['train']
@@ -1789,6 +1795,12 @@ class P5_MovieLens_Dataset(Dataset):
                 self.rating_data = self.review_data
         else:
             raise NotImplementedError
+
+        # Filter ratings >= min_rating
+        if min_rating > 0:
+            original_len = len(self.rating_data)
+            self.rating_data = [r for r in self.rating_data if float(r['overall']) >= min_rating]
+            print(f'Filtered rating_data: {original_len} -> {len(self.rating_data)} (ratings >= {min_rating})')
 
         self.sequential_data = ReadLineFromFile(os.path.join('data', split, 'sequential_data.txt'))
         item_count = defaultdict(int)
@@ -2433,7 +2445,8 @@ def get_loader(args, task_list, sample_numbers, split='toys', mode='train',
             sample_numbers,
             mode=mode,
             split=split,
-            rating_augment=False
+            rating_augment=False,
+            min_rating=4.0  # Only use ratings >= 4 (positive interactions)
         )
     else:
         from all_amazon_templates import all_tasks as task_templates
