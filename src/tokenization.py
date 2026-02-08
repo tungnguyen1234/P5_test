@@ -32,12 +32,17 @@ class P5Tokenizer(T5Tokenizer):
 
         if user_extra_ids > 0:
             additional_special_tokens.extend(["<user_id_{}>".format(i) for i in range(user_extra_ids)])
-        
+
         if item_extra_ids > 0:
             additional_special_tokens.extend(["<item_id_{}>".format(i) for i in range(item_extra_ids)])
 
-        PreTrainedTokenizer.__init__(
-            self,
+        # Store these before calling super().__init__
+        self._user_extra_ids = user_extra_ids
+        self._item_extra_ids = item_extra_ids
+
+        # Call T5Tokenizer's __init__ via super()
+        super().__init__(
+            vocab_file=vocab_file,
             eos_token=eos_token,
             unk_token=unk_token,
             pad_token=pad_token,
@@ -45,14 +50,6 @@ class P5Tokenizer(T5Tokenizer):
             additional_special_tokens=additional_special_tokens,
             **kwargs,
         )
-
-        self.vocab_file = vocab_file
-        self._extra_ids = extra_ids
-        self._user_extra_ids = user_extra_ids
-        self._item_extra_ids = item_extra_ids
-
-        self.sp_model = spm.SentencePieceProcessor()
-        self.sp_model.Load(vocab_file)
 
     @property
     def vocab_size(self):
