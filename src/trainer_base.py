@@ -1,37 +1,15 @@
-import torch.backends.cudnn as cudnn
-import torch.multiprocessing as mp
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
 import os
-import collections
 from pathlib import Path
-from packaging import version
 
-import numpy as np
-from tqdm import tqdm
 import torch
 import torch.nn as nn
 import logging
-import shutil
 from pprint import pprint
 
 from utils import load_state_dict, LossMeter, set_global_logging_level
 from pprint import pformat
 
 proj_dir = Path(__file__).resolve().parent.parent
-
-_use_native_amp = False
-_use_apex = False
-
-# Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
-if version.parse(torch.__version__) < version.parse("1.6"):
-    from transormers.file_utils import is_apex_available
-    if is_apex_available():
-        from apex import amp
-    _use_apex = True
-else:
-    _use_native_amp = True
-    from torch.cuda.amp import autocast
 
 
 class TrainerBase(object):
