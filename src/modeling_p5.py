@@ -92,6 +92,10 @@ class P5(T5ForConditionalGeneration):
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        # Compute attention_mask from input_ids before we modify input_ids
+        if attention_mask is None and input_ids is not None:
+            attention_mask = input_ids.ne(self.config.pad_token_id).to(dtype=torch.float32, device=input_ids.device)
+
         # Handle whole word embeddings by computing inputs_embeds
         if encoder_outputs is None and inputs_embeds is None and input_ids is not None:
             inputs_embeds = self.shared(input_ids)
@@ -133,8 +137,6 @@ class P5(T5ForConditionalGeneration):
             if decoder_inputs_embeds is not None:
                 decoder_inputs_embeds = decoder_inputs_embeds[:, -1:]
 
-        if attention_mask is None and input_ids is not None:
-            attention_mask = input_ids.ne(self.config.pad_token_id).to(dtype=hidden_states.dtype, device=hidden_states.device)
         encoder_attention_mask = attention_mask
 
         # Decode
