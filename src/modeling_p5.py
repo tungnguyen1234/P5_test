@@ -13,7 +13,12 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 import copy
 
 from transformers.modeling_outputs import ModelOutput, BaseModelOutput, BaseModelOutputWithPast, BaseModelOutputWithPastAndCrossAttentions, Seq2SeqLMOutput, Seq2SeqModelOutput
-from transformers.modeling_utils import PreTrainedModel, find_pruneable_heads_and_indices, prune_linear_layer
+from transformers.modeling_utils import PreTrainedModel
+# Handle different transformers versions - these functions moved to pytorch_utils in newer versions
+try:
+    from transformers.pytorch_utils import find_pruneable_heads_and_indices, prune_linear_layer
+except ImportError:
+    from transformers.modeling_utils import find_pruneable_heads_and_indices, prune_linear_layer
 from transformers.utils import logging
 from transformers import BeamScorer, BeamSearchScorer
 
