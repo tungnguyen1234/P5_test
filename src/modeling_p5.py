@@ -100,6 +100,8 @@ class P5(T5ForConditionalGeneration):
         if encoder_outputs is None and inputs_embeds is None and input_ids is not None:
             inputs_embeds = self.shared(input_ids)
             if whole_word_ids is not None:
+                # Clamp whole_word_ids to max embedding size (512) to avoid index errors
+                whole_word_ids = torch.clamp(whole_word_ids, min=0, max=511)
                 whole_word_embeds = self.whole_word_embeddings(whole_word_ids)
                 inputs_embeds = inputs_embeds + whole_word_embeds
             # Set input_ids to None since we're using inputs_embeds
