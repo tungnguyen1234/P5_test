@@ -55,7 +55,7 @@ class Trainer(TrainerBase):
         self.model = self.create_model(model_class, config, **model_kwargs)
 
         if 'p5' in self.args.tokenizer:
-            self.model.resize_token_embeddings(self.tokenizer.vocab_size)
+            self.model.resize_token_embeddings(len(self.tokenizer))
 
         self.model.tokenizer = self.tokenizer
 

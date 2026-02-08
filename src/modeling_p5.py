@@ -16,77 +16,6 @@ from transformers.utils import logging
 logger = logging.get_logger(__name__)
 
 
-class P5EncoderWrapper(nn.Module):
-    """
-    Wrapper around T5's encoder that adds whole word embeddings.
-    This replaces the original JointEncoder without depending on internal T5 classes.
-    """
-    def __init__(self, t5_encoder, config):
-        super().__init__()
-        self.t5_encoder = t5_encoder
-        self.config = config
-
-        # Set maximum 512 whole words in a source text
-        self.whole_word_embeddings = nn.Embedding(512, config.d_model)
-
-    def set_input_embeddings(self, new_embeddings):
-        self.t5_encoder.set_input_embeddings(new_embeddings)
-
-    @property
-    def embed_tokens(self):
-        return self.t5_encoder.embed_tokens
-
-    @embed_tokens.setter
-    def embed_tokens(self, value):
-        self.t5_encoder.embed_tokens = value
-
-    def get_extended_attention_mask(self, attention_mask, input_shape, device):
-        """Create extended attention mask for encoder."""
-        if attention_mask.dim() == 3:
-            extended_attention_mask = attention_mask[:, None, :, :]
-        elif attention_mask.dim() == 2:
-            extended_attention_mask = attention_mask[:, None, None, :]
-        else:
-            raise ValueError(f"Wrong shape for attention_mask (shape {attention_mask.shape})")
-
-        extended_attention_mask = extended_attention_mask.to(dtype=torch.float32)
-        extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(torch.float32).min
-        return extended_attention_mask
-
-    def forward(
-        self,
-        input_ids=None,
-        whole_word_ids=None,
-        attention_mask=None,
-        inputs_embeds=None,
-        head_mask=None,
-        past_key_values=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-    ):
-        # Get token embeddings
-        if inputs_embeds is None:
-            inputs_embeds = self.t5_encoder.embed_tokens(input_ids)
-
-            # Add whole word embeddings if provided
-            if whole_word_ids is not None:
-                whole_word_embeds = self.whole_word_embeddings(whole_word_ids)
-                inputs_embeds = inputs_embeds + whole_word_embeds
-
-        # Call the underlying T5 encoder with the modified embeddings
-        return self.t5_encoder(
-            input_ids=None,  # We pass inputs_embeds instead
-            attention_mask=attention_mask,
-            inputs_embeds=inputs_embeds,
-            head_mask=head_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-
 class P5(T5ForConditionalGeneration):
     """
     P5: Pretrain, Personalized Prompts, and Prediction Paradigm for Recommendation
@@ -106,8 +35,9 @@ class P5(T5ForConditionalGeneration):
     def __init__(self, config):
         super().__init__(config)
 
-        # Wrap the encoder to add whole word embeddings
-        self.encoder = P5EncoderWrapper(self.encoder, config)
+        # Add whole word embeddings (maximum 512 whole words in source text)
+        # This is added directly to P5, not wrapping the encoder
+        self.whole_word_embeddings = nn.Embedding(512, config.d_model)
 
         self.model_parallel = False
         self.device_map = None
@@ -162,10 +92,18 @@ class P5(T5ForConditionalGeneration):
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        # Handle whole word embeddings by computing inputs_embeds
+        if encoder_outputs is None and inputs_embeds is None and input_ids is not None:
+            inputs_embeds = self.shared(input_ids)
+            if whole_word_ids is not None:
+                whole_word_embeds = self.whole_word_embeddings(whole_word_ids)
+                inputs_embeds = inputs_embeds + whole_word_embeds
+            # Set input_ids to None since we're using inputs_embeds
+            input_ids = None
+
         if encoder_outputs is None:
             encoder_outputs = self.encoder(
                 input_ids=input_ids,
-                whole_word_ids=whole_word_ids,
                 attention_mask=attention_mask,
                 inputs_embeds=inputs_embeds,
                 head_mask=head_mask,
@@ -195,7 +133,7 @@ class P5(T5ForConditionalGeneration):
             if decoder_inputs_embeds is not None:
                 decoder_inputs_embeds = decoder_inputs_embeds[:, -1:]
 
-        if attention_mask is None:
+        if attention_mask is None and input_ids is not None:
             attention_mask = input_ids.ne(self.config.pad_token_id).to(dtype=hidden_states.dtype, device=hidden_states.device)
         encoder_attention_mask = attention_mask
 
