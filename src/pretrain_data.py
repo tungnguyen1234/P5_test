@@ -1745,6 +1745,217 @@ class P5_Yelp_Dataset(Dataset):
 MOVIELENS_DATASETS = {'ml-1m', 'ml-20m', 'netflix', 'douban_monti'}
 
 
+def load_raw_movielens_data(split, data_path='data', min_rating=4.0, train_ratio=0.8, val_ratio=0.1, seed=1234):
+    """
+    Load raw data from MovieLens, Netflix, or Douban_Monti files and convert to P5 format.
+
+    Returns:
+        rating_data: dict with 'train', 'val', 'test' splits, each a list of
+                     {'reviewerID': str, 'asin': str, 'overall': float}
+        user2id: dict mapping user string to user index
+        item2id: dict mapping item string to item index
+        id2item: dict mapping item index to item string
+        user_items: dict mapping user to list of item indices (for sequential)
+        sequential_data: list of "user_id item1 item2 ..." strings
+        item_titles: dict mapping item_id to title (if available)
+    """
+    import pandas as pd
+    from scipy import sparse
+    import h5py
+    from scipy.sparse import csc_matrix
+
+    np.random.seed(seed)
+
+    # Map split names to folder names (handle case differences)
+    split_lower = split.lower()
+    folder_map = {
+        'ml-1m': 'ML-1M',
+        'ml-20m': 'ML-20M',
+        'netflix': 'Netflix',
+        'douban_monti': 'Douban_monti'
+    }
+    folder_name = folder_map.get(split_lower, split)
+    path = os.path.join(data_path, folder_name)
+
+    print(f'Loading raw data from {path}...')
+
+    # Load data based on dataset type
+    if split_lower == 'ml-1m':
+        # MovieLens 1M: movielens_1m_dataset.dat with :: delimiter
+        data_file = os.path.join(path, 'movielens_1m_dataset.dat')
+        if os.path.exists(data_file):
+            data = np.genfromtxt(data_file, delimiter='::')
+        else:
+            # Try ratings.dat format
+            data_file = os.path.join(path, 'ratings.dat')
+            data = np.genfromtxt(data_file, delimiter='::')
+        # Format: user_id, movie_id, rating, timestamp
+        df = pd.DataFrame(data[:, :3], columns=['userId', 'movieId', 'rating'])
+
+    elif split_lower == 'ml-20m':
+        # MovieLens 20M: ratings.csv
+        data_file = os.path.join(path, 'ratings.csv')
+        df = pd.read_csv(data_file, usecols=['userId', 'movieId', 'rating'])
+
+    elif split_lower == 'netflix':
+        # Netflix: combined_data_*.txt files
+        dfs = []
+        for i in range(1, 5):
+            file_path = os.path.join(path, f'combined_data_{i}.txt')
+            if os.path.exists(file_path):
+                temp_df = pd.read_csv(file_path, header=None, names=['userId', 'rating'], usecols=[0, 1])
+                temp_df['rating'] = temp_df['rating'].astype(float)
+                dfs.append(temp_df)
+
+        data = pd.concat(dfs, ignore_index=True)
+        data_nan = pd.DataFrame(pd.isnull(data.rating))
+        data_nan = data_nan[data_nan['rating'] == True].reset_index()
+
+        # Extract movie IDs
+        diff = np.diff(data_nan['index'])
+        movie_ids = np.arange(1, len(diff) + 1)
+        movie_np = np.repeat(movie_ids, diff - 1)
+        last_record = np.full(len(data) - data_nan.iloc[-1, 0] - 1, len(diff) + 1)
+        movie_np = np.concatenate([movie_np, last_record])
+
+        data = data[pd.notnull(data['rating'])]
+        data['movieId'] = movie_np.astype(int)
+        data['userId'] = data['userId'].astype(int)
+        df = data[['userId', 'movieId', 'rating']].copy()
+
+    elif split_lower == 'douban_monti':
+        # Douban Monti: MATLAB file
+        mat_file = os.path.join(path, 'douban_monti_dataset.mat')
+
+        def load_matlab_field(path_file, name_field):
+            db = h5py.File(path_file, 'r')
+            ds = db[name_field]
+            try:
+                if 'ir' in ds.keys():
+                    data = np.asarray(ds['data'])
+                    ir = np.asarray(ds['ir'])
+                    jc = np.asarray(ds['jc'])
+                    out = csc_matrix((data, ir, jc)).astype(np.float32)
+                else:
+                    out = np.asarray(ds).astype(np.float32).T
+            except AttributeError:
+                out = np.asarray(ds).astype(np.float32).T
+            db.close()
+            return out
+
+        M = load_matlab_field(mat_file, 'M')
+        # M is users x movies matrix
+        if sparse.issparse(M):
+            M = M.toarray()
+
+        # Convert matrix to dataframe
+        users, movies = np.where(M > 0)
+        ratings = M[users, movies]
+        df = pd.DataFrame({
+            'userId': users + 1,  # 1-indexed
+            'movieId': movies + 1,  # 1-indexed
+            'rating': ratings
+        })
+    else:
+        raise ValueError(f'Unknown dataset: {split}')
+
+    print(f'Loaded {len(df)} ratings')
+
+    # Filter by minimum rating
+    if min_rating > 0:
+        original_len = len(df)
+        df = df[df['rating'] >= min_rating].copy()
+        print(f'Filtered ratings >= {min_rating}: {original_len} -> {len(df)}')
+
+    # Create user and item mappings
+    unique_users = sorted(df['userId'].unique())
+    unique_items = sorted(df['movieId'].unique())
+
+    user2id = {str(int(u)): str(i) for i, u in enumerate(unique_users)}
+    item2id = {str(int(m)): str(i) for i, m in enumerate(unique_items)}
+    id2item = {str(i): str(int(m)) for i, m in enumerate(unique_items)}
+
+    print(f'Users: {len(user2id)}, Items: {len(item2id)}')
+
+    # Shuffle and split data
+    df = df.sample(frac=1, random_state=seed).reset_index(drop=True)
+    n = len(df)
+    train_end = int(n * train_ratio)
+    val_end = int(n * (train_ratio + val_ratio))
+
+    train_df = df.iloc[:train_end]
+    val_df = df.iloc[train_end:val_end]
+    test_df = df.iloc[val_end:]
+
+    print(f'Split: train={len(train_df)}, val={len(val_df)}, test={len(test_df)}')
+
+    # Convert to P5 rating format
+    def df_to_rating_data(sub_df):
+        return [
+            {
+                'reviewerID': str(int(row['userId'])),
+                'asin': str(int(row['movieId'])),
+                'overall': float(row['rating'])
+            }
+            for _, row in sub_df.iterrows()
+        ]
+
+    rating_data = {
+        'train': df_to_rating_data(train_df),
+        'val': df_to_rating_data(val_df),
+        'test': df_to_rating_data(test_df)
+    }
+
+    # Build user_items for sequential recommendations (using all data)
+    user_items = defaultdict(list)
+    for _, row in df.iterrows():
+        user_str = str(int(row['userId']))
+        item_mapped = item2id[str(int(row['movieId']))]
+        user_items[user2id[user_str]].append(int(item_mapped))
+
+    # Create sequential_data format: "user_id item1 item2 ..."
+    sequential_data = []
+    for user_id in sorted(user_items.keys(), key=int):
+        items = user_items[user_id]
+        if len(items) >= 3:  # Need at least 3 items for sequential tasks
+            sequential_data.append(f"{user_id} " + " ".join(str(i) for i in items))
+
+    # Load movie titles if available
+    item_titles = {}
+    if split_lower == 'ml-1m':
+        movies_file = os.path.join(path, 'movies.dat')
+        if os.path.exists(movies_file):
+            with open(movies_file, 'r', encoding='latin-1') as f:
+                for line in f:
+                    parts = line.strip().split('::')
+                    if len(parts) >= 2:
+                        movie_id = str(int(parts[0]))
+                        if movie_id in item2id:
+                            item_titles[item2id[movie_id]] = parts[1]
+    elif split_lower == 'ml-20m':
+        movies_file = os.path.join(path, 'movies.csv')
+        if os.path.exists(movies_file):
+            movies_df = pd.read_csv(movies_file)
+            for _, row in movies_df.iterrows():
+                movie_id = str(int(row['movieId']))
+                if movie_id in item2id:
+                    item_titles[item2id[movie_id]] = row['title']
+    elif split_lower == 'netflix':
+        movies_file = os.path.join(path, 'movie_titles.csv')
+        if os.path.exists(movies_file):
+            try:
+                movies_df = pd.read_csv(movies_file, encoding='latin-1', header=None,
+                                       names=['movieId', 'year', 'title'])
+                for _, row in movies_df.iterrows():
+                    movie_id = str(int(row['movieId']))
+                    if movie_id in item2id:
+                        item_titles[item2id[movie_id]] = str(row['title'])
+            except:
+                pass
+
+    return rating_data, user2id, item2id, id2item, dict(user_items), sequential_data, item_titles
+
+
 class P5_MovieLens_Dataset(Dataset):
     """
     Dataset class for MovieLens, Netflix, and Douban_Monti datasets.
@@ -1756,8 +1967,7 @@ class P5_MovieLens_Dataset(Dataset):
     Unlike Amazon/Yelp datasets, these do NOT have review text or explanations.
     Movie titles are used as item descriptions where available.
 
-    Note: Data should be preprocessed with MIN_RATING=4.0 to only include
-    ratings >= 4 (positive interactions only).
+    Loads data directly from raw files (DAT, CSV, MAT) instead of preprocessed pickles.
     """
     def __init__(self, all_tasks, task_list, tokenizer, args, sample_numbers,
                  mode='train', split='ml-1m', rating_augment=False, sample_type='random',
@@ -1771,78 +1981,82 @@ class P5_MovieLens_Dataset(Dataset):
         self.rating_augment = rating_augment
         self.sample_type = sample_type
         self.min_rating = min_rating
+        self.mode = mode
 
         print('Data sources: ', split.split(','))
         print(f'Filtering ratings >= {min_rating}')
-        self.mode = mode
+
+        # Load data from raw files
+        (all_rating_data, self.user2id, self.item2id, self.id2item,
+         self.user_items, self.sequential_data, self.item_id2title) = load_raw_movielens_data(
+            split, data_path='data', min_rating=min_rating
+        )
+
+        # Select the appropriate split
         if self.mode == 'train':
-            self.review_data = load_pickle(os.path.join('data', split, 'review_splits.pkl'))['train']
-            if self.rating_augment:
-                self.rating_data = load_pickle(os.path.join('data', split, 'rating_splits_augmented.pkl'))['train']
-            else:
-                self.rating_data = self.review_data
+            self.rating_data = all_rating_data['train']
         elif self.mode == 'val':
-            self.review_data = load_pickle(os.path.join('data', split, 'review_splits.pkl'))['val']
-            if self.rating_augment:
-                self.rating_data = load_pickle(os.path.join('data', split, 'rating_splits_augmented.pkl'))['val']
-            else:
-                self.rating_data = self.review_data
+            self.rating_data = all_rating_data['val']
         elif self.mode == 'test':
-            self.review_data = load_pickle(os.path.join('data', split, 'review_splits.pkl'))['test']
-            if self.rating_augment:
-                self.rating_data = load_pickle(os.path.join('data', split, 'rating_splits_augmented.pkl'))['test']
-            else:
-                self.rating_data = self.review_data
+            self.rating_data = all_rating_data['test']
         else:
             raise NotImplementedError
 
-        # Filter ratings >= min_rating
-        if min_rating > 0:
-            original_len = len(self.rating_data)
-            self.rating_data = [r for r in self.rating_data if float(r['overall']) >= min_rating]
-            print(f'Filtered rating_data: {original_len} -> {len(self.rating_data)} (ratings >= {min_rating})')
+        self.review_data = self.rating_data  # For compatibility
 
-        self.sequential_data = ReadLineFromFile(os.path.join('data', split, 'sequential_data.txt'))
+        print(f'Mode: {mode}, Rating data size: {len(self.rating_data)}')
+
+        # Build item statistics from sequential data
         item_count = defaultdict(int)
-        user_items = defaultdict()
+        user_items_parsed = defaultdict()
 
         for line in self.sequential_data:
-            user, items = line.strip().split(' ', 1)
-            items = items.split(' ')
+            parts = line.strip().split(' ', 1)
+            if len(parts) < 2:
+                continue
+            user, items_str = parts
+            items = items_str.split(' ')
             items = [int(item) for item in items]
-            user_items[user] = items
+            user_items_parsed[user] = items
             for item in items:
                 item_count[item] += 1
 
         self.all_item = list(item_count.keys())
         count = list(item_count.values())
-        sum_value = np.sum([x for x in count])
-        self.probability = [value / sum_value for value in count]
-        self.user_items = user_items
+        sum_value = np.sum([x for x in count]) if count else 1
+        self.probability = [value / sum_value for value in count] if count else []
+        self.user_items = user_items_parsed if user_items_parsed else self.user_items
 
+        # Generate negative samples for test mode
         if self.mode == 'test':
-            self.negative_samples = ReadLineFromFile(os.path.join('data', split, 'negative_samples.txt'))
+            self.negative_samples = self._generate_negative_samples()
 
-        datamaps = load_json(os.path.join('data', split, 'datamaps.json'))
-        self.user2id = datamaps['user2id']
-        self.item2id = datamaps['item2id']
-        self.user_list = list(datamaps['user2id'].keys())
-        self.item_list = list(datamaps['item2id'].keys())
-        self.id2item = datamaps['id2item']
+        self.user_list = list(self.user2id.keys())
+        self.item_list = list(self.item2id.keys())
 
-        self.user_id2name = load_pickle(os.path.join('data', split, 'user_id2name.pkl'))
-
-        # Load movie title metadata (instead of Amazon's meta.json.gz)
-        title_path = os.path.join('data', split, 'item_id2title.pkl')
-        if os.path.exists(title_path):
-            self.item_id2title = load_pickle(title_path)
-        else:
-            self.item_id2title = {}
+        # User ID to name mapping (simple numeric for these datasets)
+        self.user_id2name = {uid: f'user_{uid}' for uid in self.user2id.values()}
 
         print('compute_datum_info')
         self.total_length = 0
         self.datum_info = []
         self.compute_datum_info()
+
+    def _generate_negative_samples(self, num_negatives=99):
+        """Generate negative samples for test evaluation."""
+        negative_samples = []
+        all_items_set = set(self.all_item)
+
+        for user_id in sorted(self.user_items.keys(), key=lambda x: int(x) if x.isdigit() else 0):
+            user_seq = set(self.user_items.get(user_id, []))
+            available = list(all_items_set - user_seq)
+            if len(available) >= num_negatives:
+                neg_items = np.random.choice(available, num_negatives, replace=False)
+            else:
+                neg_items = available
+            negative_samples.append(f"{user_id} " + " ".join(str(i) for i in neg_items))
+
+        return negative_samples
 
     def compute_datum_info(self):
         curr = 0
