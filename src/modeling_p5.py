@@ -196,7 +196,8 @@ class P5(T5ForConditionalGeneration):
         decoder_config.is_decoder = True
         decoder_config.is_encoder_decoder = False
 
-        self.decoder = T5Stack(decoder_config, self.shared)
+        # Use keyword argument for embed_tokens (newer transformers compatibility)
+        self.decoder = T5Stack(decoder_config, embed_tokens=self.shared)
 
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
 
