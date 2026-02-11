@@ -100,6 +100,11 @@ class P5(T5ForConditionalGeneration):
                 whole_word_embeds = self.whole_word_embeddings(whole_word_ids)
                 inputs_embeds = inputs_embeds + whole_word_embeds
 
+        # Create attention_mask if not provided (since we pass input_ids=None to parent)
+        if attention_mask is None and input_ids is not None:
+            pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else 0
+            attention_mask = (input_ids != pad_token_id).long()
+
         # Call parent's forward with inputs_embeds instead of input_ids
         outputs = super().forward(
             input_ids=None,  # Use inputs_embeds instead
@@ -131,6 +136,9 @@ class P5(T5ForConditionalGeneration):
                 outputs.logits.view(-1, outputs.logits.size(-1)),
                 labels.view(-1)
             )
+            # Handle case where all labels are -100 (which would cause NaN)
+            if torch.isnan(loss).any():
+                loss = torch.where(torch.isnan(loss), torch.zeros_like(loss), loss)
             return P5Seq2SeqLMOutput(
                 loss=loss,
                 logits=outputs.logits,
