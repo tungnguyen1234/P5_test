@@ -83,6 +83,7 @@ class P5Pretraining(P5):
         self.eval()
         device = next(self.parameters()).device
         input_ids = batch['input_ids'].to(device)
+        whole_word_ids = batch['whole_word_ids'].to(device)
 
         lm_labels = batch["target_ids"].to(device)
 
@@ -90,6 +91,7 @@ class P5Pretraining(P5):
 
         output = self(
             input_ids=input_ids,
+            whole_word_ids=whole_word_ids,
             labels=lm_labels,
             return_dict=True
         )
