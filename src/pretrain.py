@@ -57,6 +57,10 @@ class Trainer(TrainerBase):
         if 'p5' in self.args.tokenizer:
             self.model.resize_token_embeddings(len(self.tokenizer))
 
+        # Check for NaN weights and fix if necessary
+        if hasattr(self.model, '_post_init_check'):
+            self.model._post_init_check()
+
         self.model.tokenizer = self.tokenizer
 
         # Load Checkpoint
@@ -147,6 +151,13 @@ class Trainer(TrainerBase):
                         results = self.model.train_step(batch)
 
                 loss = results['loss']
+
+                # Skip gradient update if loss is NaN to prevent weight corruption
+                if torch.isnan(loss) or torch.isinf(loss):
+                    print(f"WARNING: Skipping gradient update due to NaN/Inf loss at step {step_i}")
+                    for param in self.model.parameters():
+                        param.grad = None
+                    continue
 
                 if self.args.fp16 and _use_native_amp:
                     self.scaler.scale(loss).backward()

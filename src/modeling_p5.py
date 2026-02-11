@@ -38,9 +38,28 @@ class P5(T5ForConditionalGeneration):
 
         # Add whole word embeddings (maximum 512 whole words in source text)
         self.whole_word_embeddings = nn.Embedding(512, config.d_model)
+        # Initialize with small values to avoid numerical issues
+        nn.init.normal_(self.whole_word_embeddings.weight, mean=0.0, std=0.02)
 
         self.model_parallel = False
         self.device_map = None
+
+    def _post_init_check(self):
+        """Check and fix any NaN weights after initialization."""
+        # Check shared embeddings
+        if torch.isnan(self.shared.weight).any():
+            print("WARNING: NaN detected in shared embeddings, reinitializing...")
+            nn.init.normal_(self.shared.weight, mean=0.0, std=0.02)
+
+        # Check whole_word_embeddings
+        if torch.isnan(self.whole_word_embeddings.weight).any():
+            print("WARNING: NaN detected in whole_word_embeddings, reinitializing...")
+            nn.init.normal_(self.whole_word_embeddings.weight, mean=0.0, std=0.02)
+
+        # Check lm_head
+        if torch.isnan(self.lm_head.weight).any():
+            print("WARNING: NaN detected in lm_head, reinitializing...")
+            nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.02)
 
     def set_input_embeddings(self, new_embeddings):
         self.shared = new_embeddings
