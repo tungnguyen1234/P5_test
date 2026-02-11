@@ -21,15 +21,6 @@ class P5Pretraining(P5):
 
         loss_weights = batch["loss_weights"].to(device)
 
-        # Debug: Check for out-of-vocabulary token IDs
-        vocab_size = self.config.vocab_size
-        if (input_ids >= vocab_size).any():
-            print(f"WARNING: input_ids contains values >= vocab_size ({vocab_size})")
-            print(f"Max input_id: {input_ids.max().item()}")
-        if (lm_labels[lm_labels != -100] >= vocab_size).any():
-            print(f"WARNING: labels contains values >= vocab_size ({vocab_size})")
-            print(f"Max label: {lm_labels[lm_labels != -100].max().item()}")
-
         output = self(
             input_ids=input_ids,
             whole_word_ids=whole_word_ids,
@@ -43,17 +34,6 @@ class P5Pretraining(P5):
         B, L = lm_labels.size()
 
         loss = output['loss']
-
-        # Debug: Check for NaN in raw loss
-        if torch.isnan(loss).any():
-            nan_count = torch.isnan(loss).sum().item()
-            print(f"WARNING: NaN detected in raw loss ({nan_count}/{loss.numel()} values)")
-            print(f"Number of valid labels: {lm_mask.sum().item()}")
-            print(f"Sample source text: {batch['source_text'][0] if 'source_text' in batch else 'N/A'}")
-            print(f"Sample target text: {batch['target_text'][0] if 'target_text' in batch else 'N/A'}")
-            # Replace NaN with 0 to allow training to continue (for debugging)
-            loss = torch.where(torch.isnan(loss), torch.zeros_like(loss), loss)
-
         loss = loss.view(B, L) * lm_mask
 
         loss = loss.sum(dim=1) / lm_mask.sum(dim=1).clamp(min=1)

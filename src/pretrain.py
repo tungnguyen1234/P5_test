@@ -129,7 +129,7 @@ class Trainer(TrainerBase):
             self.model.train()
 
             if self.verbose:
-                pbar = tqdm(total=len(self.train_loader), ncols=275)
+                pbar = tqdm(total=len(self.train_loader), ncols=120)
 
             epoch_results = {}
             for loss_name in LOSSES_NAME:
@@ -212,16 +212,15 @@ class Trainer(TrainerBase):
                         elif isinstance(v, torch.Tensor):
                             epoch_results[k] += v.item()
 
-                if self.verbose and step_i % 200:
-                    desc_str = f'Epoch {epoch} | LR {lr:.6f} |'
-
+                if self.verbose:
                     for i, (loss_name, loss_meter) in enumerate(zip(LOSSES_NAME, loss_meters)):
-
                         if loss_name in results:
                             loss_meter.update(results[f'{loss_name}'] / results[f'{loss_name}_count'])
+
+                    desc_str = f'Epoch {epoch} | LR {lr:.6f}'
+                    for loss_name, loss_meter in zip(LOSSES_NAME, loss_meters):
                         if len(loss_meter) > 0:
-                            loss_count = epoch_results[f'{loss_name}_count']
-                            desc_str += f' {loss_name} ({loss_count}) {loss_meter.val:.3f}'
+                            desc_str += f' | {loss_name}: {loss_meter.val:.3f}'
 
                     pbar.set_description(desc_str)
                     pbar.update(1)
@@ -309,7 +308,7 @@ class Trainer(TrainerBase):
                 loss_meter = LossMeter()
                 loss_meters = [LossMeter() for _ in range(len(LOSSES_NAME))]
 
-                pbar = tqdm(total=len(self.val_loader), ncols=275)
+                pbar = tqdm(total=len(self.val_loader), ncols=120)
 
             for step_i, batch in enumerate(self.val_loader):
 
@@ -325,15 +324,15 @@ class Trainer(TrainerBase):
                         elif isinstance(v, torch.Tensor):
                             epoch_results[k] += v.item()
 
-                if self.verbose and step_i % 200:
-                    desc_str = f'Valid Epoch {epoch} |'
+                if self.verbose:
                     for i, (loss_name, loss_meter) in enumerate(zip(LOSSES_NAME, loss_meters)):
-
                         if loss_name in results:
                             loss_meter.update(results[f'{loss_name}'] / results[f'{loss_name}_count'])
+
+                    desc_str = f'Valid Epoch {epoch}'
+                    for loss_name, loss_meter in zip(LOSSES_NAME, loss_meters):
                         if len(loss_meter) > 0:
-                            loss_count = epoch_results[f'{loss_name}_count']
-                            desc_str += f' {loss_name} ({loss_count}) {loss_meter.val:.3f}'
+                            desc_str += f' | {loss_name}: {loss_meter.val:.3f}'
 
                     pbar.set_description(desc_str)
                     pbar.update(1)

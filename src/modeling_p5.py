@@ -114,23 +114,10 @@ class P5(T5ForConditionalGeneration):
         if inputs_embeds is None and input_ids is not None:
             inputs_embeds = self.shared(input_ids)
 
-            # Debug: Check token embeddings for NaN
-            if torch.isnan(inputs_embeds).any():
-                print(f"DEBUG: NaN in token embeddings from self.shared()")
-                print(f"  input_ids range: [{input_ids.min().item()}, {input_ids.max().item()}]")
-                print(f"  shared weight NaN: {torch.isnan(self.shared.weight).any()}")
-
             if whole_word_ids is not None:
                 # Clamp whole_word_ids to max embedding size (512) to avoid index errors
                 whole_word_ids = torch.clamp(whole_word_ids, min=0, max=511)
                 whole_word_embeds = self.whole_word_embeddings(whole_word_ids)
-
-                # Debug: Check whole word embeddings for NaN
-                if torch.isnan(whole_word_embeds).any():
-                    print(f"DEBUG: NaN in whole_word_embeddings")
-                    print(f"  whole_word_ids range: [{whole_word_ids.min().item()}, {whole_word_ids.max().item()}]")
-                    print(f"  whole_word_embeddings weight NaN: {torch.isnan(self.whole_word_embeddings.weight).any()}")
-
                 inputs_embeds = inputs_embeds + whole_word_embeds
 
         # Create attention_mask if not provided (since we pass input_ids=None to parent)
@@ -163,18 +150,6 @@ class P5(T5ForConditionalGeneration):
 
         # Handle custom loss reduction if needed
         if labels is not None and not reduce_loss:
-            # Debug: Check if logits contain NaN/Inf
-            if torch.isnan(outputs.logits).any() or torch.isinf(outputs.logits).any():
-                print(f"WARNING: logits contain NaN or Inf!")
-                print(f"  NaN count: {torch.isnan(outputs.logits).sum().item()}")
-                print(f"  Inf count: {torch.isinf(outputs.logits).sum().item()}")
-                print(f"  logits shape: {outputs.logits.shape}")
-                print(f"  logits range: [{outputs.logits[~torch.isnan(outputs.logits)].min().item() if (~torch.isnan(outputs.logits)).any() else 'N/A'}, {outputs.logits[~torch.isnan(outputs.logits)].max().item() if (~torch.isnan(outputs.logits)).any() else 'N/A'}]")
-                # Check inputs_embeds
-                if inputs_embeds is not None:
-                    print(f"  inputs_embeds NaN: {torch.isnan(inputs_embeds).any()}")
-                    print(f"  inputs_embeds Inf: {torch.isinf(inputs_embeds).any()}")
-
             # Recompute loss without reduction
             loss_fct = CrossEntropyLoss(ignore_index=-100, reduction='none')
             loss = loss_fct(
