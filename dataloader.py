@@ -126,18 +126,22 @@ def load_data_100k(path='./', delimiter='\t'):
     n_train = train.shape[0]  # num of training ratings
     n_test = test.shape[0]  # num of test ratings
 
-    train_r = np.zeros((n_m, n_u), dtype='float32')
+    # Build sparse matrix directly from COO format
+    # Combine train and test data
+    all_data = np.concatenate((train, test), axis=0)
+    movie_indices = all_data[:, 1] - 1  # 0-indexed
+    user_indices = all_data[:, 0] - 1   # 0-indexed
+    ratings = all_data[:, 2].astype('float32')
 
+    # Create sparse rating matrix (movies x users)
+    train_r = sparse.csr_matrix((ratings, (movie_indices, user_indices)),
+                                shape=(n_m, n_u), dtype='float32')
 
-    for i in range(n_train):
-        train_r[train[i,1]-1, train[i,0]-1] = train[i,2]
+    # Create sparse mask matrix
+    train_m = train_r.copy()
+    train_m.data = np.ones_like(train_m.data, dtype='float32')
 
-    for i in range(n_test):
-        train_r[test[i,1]-1, test[i,0]-1] = test[i,2]
-
-    train_m = np.greater(train_r, 1e-12).astype('float32')  # masks indicating non-zero entries
-
-    print('data matrix loaded')
+    print('data matrix loaded (sparse)')
     print('num of users: {}'.format(n_u))
     print('num of movies: {}'.format(n_m))
     print('num of training ratings: {}'.format(n_train))
@@ -155,19 +159,27 @@ def load_data_100k_train_test(path='./', delimiter='\t'):
     n_train = train.shape[0]  # num of training ratings
     n_test = test.shape[0]  # num of test ratings
 
-    train_r = np.zeros((n_m, n_u), dtype='float32')
-    test_r = np.zeros((n_m, n_u), dtype='float32')
+    # Build sparse train matrix from COO format
+    train_movie_indices = train[:, 1] - 1
+    train_user_indices = train[:, 0] - 1
+    train_ratings = train[:, 2].astype('float32')
+    train_r = sparse.csr_matrix((train_ratings, (train_movie_indices, train_user_indices)),
+                                shape=(n_m, n_u), dtype='float32')
 
-    for i in range(n_train):
-        train_r[train[i,1]-1, train[i,0]-1] = train[i,2]
+    # Build sparse test matrix from COO format
+    test_movie_indices = test[:, 1] - 1
+    test_user_indices = test[:, 0] - 1
+    test_ratings = test[:, 2].astype('float32')
+    test_r = sparse.csr_matrix((test_ratings, (test_movie_indices, test_user_indices)),
+                               shape=(n_m, n_u), dtype='float32')
 
-    for i in range(n_test):
-        test_r[test[i,1]-1, test[i,0]-1] = test[i,2]
+    # Create sparse mask matrices
+    train_m = train_r.copy()
+    train_m.data = np.ones_like(train_m.data, dtype='float32')
+    test_m = test_r.copy()
+    test_m.data = np.ones_like(test_m.data, dtype='float32')
 
-    train_m = np.greater(train_r, 1e-12).astype('float32')  # masks indicating non-zero entries
-    test_m = np.greater(test_r, 1e-12).astype('float32')
-
-    print('data matrix loaded')
+    print('data matrix loaded (sparse)')
     print('num of users: {}'.format(n_u))
     print('num of movies: {}'.format(n_m))
     print('num of training ratings: {}'.format(n_train))
@@ -187,28 +199,28 @@ def load_data_1m(path='./', delimiter='::', seed=1234):
     n_m = np.unique(data[:,1]).size  # num of movies
     n_r = data.shape[0]  # num of ratings
 
-    udict = {}
-    for i, u in enumerate(np.unique(data[:,0]).tolist()):
-        udict[u] = i
-    mdict = {}
-    for i, m in enumerate(np.unique(data[:,1]).tolist()):
-        mdict[m] = i
+    # Create dictionaries for user and movie ID mapping
+    udict = {u: i for i, u in enumerate(np.unique(data[:,0]).tolist())}
+    mdict = {m: i for i, m in enumerate(np.unique(data[:,1]).tolist())}
 
     np.random.seed(seed)
     idx = np.arange(n_r)
     np.random.shuffle(idx)
 
-    train_r = np.zeros((n_m, n_u), dtype='float32')
+    # Map IDs to indices using vectorized operations
+    user_indices = np.array([udict[data[i, 0]] for i in idx])
+    movie_indices = np.array([mdict[data[i, 1]] for i in idx])
+    ratings = data[idx, 2].astype('float32')
 
-    for i in range(n_r):
-        u_id = data[idx[i], 0]
-        m_id = data[idx[i], 1]
-        r = data[idx[i], 2]
-        train_r[mdict[m_id], udict[u_id]] = r
+    # Build sparse matrix directly from COO format
+    train_r = sparse.csr_matrix((ratings, (movie_indices, user_indices)),
+                                shape=(n_m, n_u), dtype='float32')
 
-    train_m = np.greater(train_r, 1e-12).astype('float32')  # masks indicating non-zero entries
+    # Create sparse mask matrix
+    train_m = train_r.copy()
+    train_m.data = np.ones_like(train_m.data, dtype='float32')
 
-    print('data matrix loaded')
+    print('data matrix loaded (sparse)')
     print('num of users: {}'.format(n_u))
     print('num of movies: {}'.format(n_m))
 
@@ -226,38 +238,46 @@ def load_data_1m_train_test(path='./', delimiter='::', frac=0.1, seed=1234):
     n_m = np.unique(data[:,1]).size  # num of movies
     n_r = data.shape[0]  # num of ratings
 
-    udict = {}
-    for i, u in enumerate(np.unique(data[:,0]).tolist()):
-        udict[u] = i
-    mdict = {}
-    for i, m in enumerate(np.unique(data[:,1]).tolist()):
-        mdict[m] = i
+    # Create dictionaries for user and movie ID mapping
+    udict = {u: i for i, u in enumerate(np.unique(data[:,0]).tolist())}
+    mdict = {m: i for i, m in enumerate(np.unique(data[:,1]).tolist())}
 
     np.random.seed(seed)
     idx = np.arange(n_r)
     np.random.shuffle(idx)
 
-    train_r = np.zeros((n_m, n_u), dtype='float32')
-    test_r = np.zeros((n_m, n_u), dtype='float32')
+    # Split indices for train and test
+    n_test = int(frac * n_r)
+    test_idx = idx[:n_test]
+    train_idx = idx[n_test:]
 
-    for i in range(n_r):
-        u_id = data[idx[i], 0]
-        m_id = data[idx[i], 1]
-        r = data[idx[i], 2]
+    # Map IDs to indices for test set
+    test_user_indices = np.array([udict[data[i, 0]] for i in test_idx])
+    test_movie_indices = np.array([mdict[data[i, 1]] for i in test_idx])
+    test_ratings = data[test_idx, 2].astype('float32')
 
-        if i < int(frac * n_r):
-            test_r[mdict[m_id], udict[u_id]] = r
-        else:
-            train_r[mdict[m_id], udict[u_id]] = r
+    # Map IDs to indices for train set
+    train_user_indices = np.array([udict[data[i, 0]] for i in train_idx])
+    train_movie_indices = np.array([mdict[data[i, 1]] for i in train_idx])
+    train_ratings = data[train_idx, 2].astype('float32')
 
-    train_m = np.greater(train_r, 1e-12).astype('float32')  # masks indicating non-zero entries
-    test_m = np.greater(test_r, 1e-12).astype('float32')
+    # Build sparse matrices directly from COO format
+    train_r = sparse.csr_matrix((train_ratings, (train_movie_indices, train_user_indices)),
+                                shape=(n_m, n_u), dtype='float32')
+    test_r = sparse.csr_matrix((test_ratings, (test_movie_indices, test_user_indices)),
+                               shape=(n_m, n_u), dtype='float32')
 
-    print('data matrix loaded')
+    # Create sparse mask matrices
+    train_m = train_r.copy()
+    train_m.data = np.ones_like(train_m.data, dtype='float32')
+    test_m = test_r.copy()
+    test_m.data = np.ones_like(test_m.data, dtype='float32')
+
+    print('data matrix loaded (sparse)')
     print('num of users: {}'.format(n_u))
     print('num of movies: {}'.format(n_m))
-    print('num of training ratings: {}'.format(n_r - int(frac * n_r)))
-    print('num of test ratings: {}'.format(int(frac * n_r)))
+    print('num of training ratings: {}'.format(n_r - n_test))
+    print('num of test ratings: {}'.format(n_test))
 
     return n_m, n_u, train_r, train_m, test_r, test_m
 
@@ -281,23 +301,28 @@ def load_matlab_file(path_file, name_field):
     return out
 
 def load_data_monti(path='./'):
-    # Load the 'M' matrix and 'Otraining' matrix from the MATLAB file
+    # Load the 'M' matrix from the MATLAB file
     M = load_matlab_file(path+'douban_monti_dataset.mat', 'M')
 
     # Calculate the number of users and movies from the 'M' matrix
     n_u = M.shape[0]  # num of users
     n_m = M.shape[1]  # num of movies
 
+    # Convert to sparse if not already
+    if not sparse.issparse(M):
+        M = sparse.csr_matrix(M)
+
     # Count the number of training ratings
-    n_train = M[np.where(M)].size
+    n_train = M.nnz
 
     # Transpose the training data to get the desired format (movies x users)
-    train_r = M.T
+    train_r = M.T.tocsr()
 
-    # Create a mask for non-zero entries in the training ratings matrix
-    train_m = np.greater(train_r, 1e-12).astype('float32')
+    # Create a sparse mask for non-zero entries
+    train_m = train_r.copy()
+    train_m.data = np.ones_like(train_m.data, dtype='float32')
 
-    print('data matrix loaded')
+    print('data matrix loaded (sparse)')
     print('num of users: {}'.format(n_u))
     print('num of movies: {}'.format(n_m))
     print('num of training ratings: {}'.format(n_train))
@@ -308,21 +333,37 @@ def load_data_monti(path='./'):
 def load_data_monti_train_test(path='./'):
 
     M = load_matlab_file(path+'douban_monti_dataset.mat', 'M')
-    Otraining = load_matlab_file(path+'douban_monti_dataset.mat', 'Otraining') * M
-    Otest = load_matlab_file(path+'douban_monti_dataset.mat', 'Otest') * M
+    Otraining = load_matlab_file(path+'douban_monti_dataset.mat', 'Otraining')
+    Otest = load_matlab_file(path+'douban_monti_dataset.mat', 'Otest')
+
+    # Convert to sparse if not already
+    if not sparse.issparse(M):
+        M = sparse.csr_matrix(M)
+    if not sparse.issparse(Otraining):
+        Otraining = sparse.csr_matrix(Otraining)
+    if not sparse.issparse(Otest):
+        Otest = sparse.csr_matrix(Otest)
+
+    # Apply mask using element-wise multiplication (sparse-friendly)
+    Otraining = Otraining.multiply(M)
+    Otest = Otest.multiply(M)
 
     n_u = M.shape[0]  # num of users
     n_m = M.shape[1]  # num of movies
-    n_train = Otraining[np.where(Otraining)].size  # num of training ratings
-    n_test = Otest[np.where(Otest)].size  # num of test ratings
+    n_train = Otraining.nnz  # num of training ratings
+    n_test = Otest.nnz  # num of test ratings
 
-    train_r = Otraining.T
-    test_r = Otest.T
+    # Transpose to get (movies x users) format
+    train_r = Otraining.T.tocsr()
+    test_r = Otest.T.tocsr()
 
-    train_m = np.greater(train_r, 1e-12).astype('float32')  # masks indicating non-zero entries
-    test_m = np.greater(test_r, 1e-12).astype('float32')
+    # Create sparse mask matrices
+    train_m = train_r.copy()
+    train_m.data = np.ones_like(train_m.data, dtype='float32')
+    test_m = test_r.copy()
+    test_m.data = np.ones_like(test_m.data, dtype='float32')
 
-    print('data matrix loaded')
+    print('data matrix loaded (sparse)')
     print('num of users: {}'.format(n_u))
     print('num of movies: {}'.format(n_m))
     print('num of training ratings: {}'.format(n_train))
@@ -341,10 +382,20 @@ def check_no_repeats(samples_dict):
 
 
 def filter_rows(A, sample_indices):
+    """Filter rows where all specified columns have non-zero values.
+    Works with both sparse and dense matrices."""
     valid_rows = []
-    for i in range(A.shape[0]):
-        if all(A[i, j] > 0 for j in sample_indices):
-            valid_rows.append(i)
+    if sparse.issparse(A):
+        # Convert to lil_matrix for efficient row slicing
+        A_lil = A.tolil()
+        for i in range(A.shape[0]):
+            row_data = A_lil.getrowview(i)
+            if all(row_data[0, j] > 0 for j in sample_indices):
+                valid_rows.append(i)
+    else:
+        for i in range(A.shape[0]):
+            if all(A[i, j] > 0 for j in sample_indices):
+                valid_rows.append(i)
     return valid_rows
 
 def shuffle_sublist(lst, start_index, end_index):
@@ -404,43 +455,62 @@ def random_sampling_sequence(A, n, start = 20, end = 5):
 
 ##### Experiment 2
 def get_users_most_numbers(arr):
-   # Target set of integers
+    """Find users with specific rating patterns.
+    Works with both sparse and dense matrices."""
+    # Target set of integers
     target_set = set(np.arange(0, 6, dtype=float))
-                                                                                                                                 
+
+    # Convert to dense for column-wise unique value checking if sparse
+    # (this operation requires dense access pattern)
+    if sparse.issparse(arr):
+        arr_dense = arr.toarray()
+    else:
+        arr_dense = arr
+
     # Check for columns that match the target set exactly
-    valid_columns_indices = np.array([col for col in range(arr.shape[1]) if set(arr[:, col]) == target_set])
+    valid_columns_indices = np.array([col for col in range(arr_dense.shape[1])
+                                      if set(arr_dense[:, col]) == target_set])
+
+    if len(valid_columns_indices) == 0:
+        return None, None, None, None
 
     # Extract the relevant columns based on valid_columns_indices
-    relevant_columns = arr[:, valid_columns_indices]
+    relevant_columns = arr_dense[:, valid_columns_indices]
 
-    # Count the number of non-zeros in each row of the selected columns
-    nonzero_counts_per_row = np.count_nonzero(relevant_columns, axis=0)
+    # Count the number of non-zeros in each column of the selected columns
+    nonzero_counts_per_col = np.count_nonzero(relevant_columns, axis=0)
 
     # Calculating median, mean
-    median_val = np.median(nonzero_counts_per_row)
-    mean_val = np.mean(nonzero_counts_per_row)
+    median_val = np.median(nonzero_counts_per_col)
+    mean_val = np.mean(nonzero_counts_per_col)
 
     # Finding mode and corresponding indices
-    min_idx = valid_columns_indices[np.argmin(nonzero_counts_per_row)]
-    max_idx = valid_columns_indices[np.argmax(nonzero_counts_per_row)] 
+    min_idx = valid_columns_indices[np.argmin(nonzero_counts_per_col)]
+    max_idx = valid_columns_indices[np.argmax(nonzero_counts_per_col)]
     # Finding index closest to median and mean
-    median_idx = valid_columns_indices[np.abs(nonzero_counts_per_row - median_val).argmin()]
-    mean_idx = valid_columns_indices[np.abs(nonzero_counts_per_row - mean_val).argmin()]
+    median_idx = valid_columns_indices[np.abs(nonzero_counts_per_col - median_val).argmin()]
+    mean_idx = valid_columns_indices[np.abs(nonzero_counts_per_col - mean_val).argmin()]
 
-    # get mode idx
-    # mode_idx = np.where(nonzero_counts_per_row == stats.mode(nonzero_counts_per_row)[0][0])[0]
-   
     return min_idx, max_idx, median_idx, mean_idx
 
 def get_list_of_products(user, A):
+    """Get list of products for a user with ratings 1-5.
+    Works with both sparse and dense matrices."""
     # Initialize an empty list to store the indices
     indices = []
-    
+
+    # Get the user's row (transpose A so users are rows)
+    if sparse.issparse(A):
+        # For sparse matrix, get the row as dense array
+        user_row = A.T.getrow(user).toarray().flatten()
+    else:
+        user_row = A.T[user]
+
     # Loop through the numbers 1 to 5 to find matching column indices
     for j in range(1, 6):  # 1 to 5 inclusive
-        # Find indices in row 'idx' where the value equals 'j'
-        matched_indices = np.where(A.T[user] == j)[0]
-        
+        # Find indices where the value equals 'j'
+        matched_indices = np.where(user_row == j)[0]
+
         # If there are matching indices, randomly choose one and add to the list
         if matched_indices.size > 0:
             chosen_index = np.random.choice(matched_indices)

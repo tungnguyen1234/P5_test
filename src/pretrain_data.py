@@ -1845,12 +1845,15 @@ def load_raw_movielens_data(split, data_path='data', min_rating=4.0, train_ratio
 
         M = load_matlab_field(mat_file, 'M')
         # M is users x movies matrix
-        if sparse.issparse(M):
-            M = M.toarray()
 
-        # Convert matrix to dataframe
-        users, movies = np.where(M > 0)
-        ratings = M[users, movies]
+        # Convert matrix to dataframe using sparse-friendly extraction
+        if sparse.issparse(M):
+            # Use sparse.find() to efficiently extract non-zero entries
+            users, movies, ratings = sparse.find(M)
+        else:
+            users, movies = np.where(M > 0)
+            ratings = M[users, movies]
+
         df = pd.DataFrame({
             'userId': users + 1,  # 1-indexed
             'movieId': movies + 1,  # 1-indexed
