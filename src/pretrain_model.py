@@ -46,10 +46,13 @@ class P5Pretraining(P5):
 
         # Debug: Check for NaN in raw loss
         if torch.isnan(loss).any():
-            print(f"WARNING: NaN detected in raw loss")
+            nan_count = torch.isnan(loss).sum().item()
+            print(f"WARNING: NaN detected in raw loss ({nan_count}/{loss.numel()} values)")
             print(f"Number of valid labels: {lm_mask.sum().item()}")
             print(f"Sample source text: {batch['source_text'][0] if 'source_text' in batch else 'N/A'}")
             print(f"Sample target text: {batch['target_text'][0] if 'target_text' in batch else 'N/A'}")
+            # Replace NaN with 0 to allow training to continue (for debugging)
+            loss = torch.where(torch.isnan(loss), torch.zeros_like(loss), loss)
 
         loss = loss.view(B, L) * lm_mask
 

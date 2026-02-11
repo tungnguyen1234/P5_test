@@ -130,15 +130,24 @@ class P5(T5ForConditionalGeneration):
 
         # Handle custom loss reduction if needed
         if labels is not None and not reduce_loss:
+            # Debug: Check if logits contain NaN/Inf
+            if torch.isnan(outputs.logits).any() or torch.isinf(outputs.logits).any():
+                print(f"WARNING: logits contain NaN or Inf!")
+                print(f"  NaN count: {torch.isnan(outputs.logits).sum().item()}")
+                print(f"  Inf count: {torch.isinf(outputs.logits).sum().item()}")
+                print(f"  logits shape: {outputs.logits.shape}")
+                print(f"  logits range: [{outputs.logits[~torch.isnan(outputs.logits)].min().item() if (~torch.isnan(outputs.logits)).any() else 'N/A'}, {outputs.logits[~torch.isnan(outputs.logits)].max().item() if (~torch.isnan(outputs.logits)).any() else 'N/A'}]")
+                # Check inputs_embeds
+                if inputs_embeds is not None:
+                    print(f"  inputs_embeds NaN: {torch.isnan(inputs_embeds).any()}")
+                    print(f"  inputs_embeds Inf: {torch.isinf(inputs_embeds).any()}")
+
             # Recompute loss without reduction
             loss_fct = CrossEntropyLoss(ignore_index=-100, reduction='none')
             loss = loss_fct(
                 outputs.logits.view(-1, outputs.logits.size(-1)),
                 labels.view(-1)
             )
-            # Handle case where all labels are -100 (which would cause NaN)
-            if torch.isnan(loss).any():
-                loss = torch.where(torch.isnan(loss), torch.zeros_like(loss), loss)
             return P5Seq2SeqLMOutput(
                 loss=loss,
                 logits=outputs.logits,
